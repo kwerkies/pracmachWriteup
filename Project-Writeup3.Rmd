@@ -1,0 +1,119 @@
+---
+title: "Project-Writeup"
+author: "kwerkies"
+date: "Saturday, March 21, 2015"
+output: pdf_document
+---
+
+###Summary
+
+Using exercise data from 6 participants, we seek to predict how well they perform their exercises. Specifically, how does a participant's performance on the various variables affect his/her "classe" grading? 
+
+In this report, I shall outline:   
+* how the predictive model was built
+* how cross-validation was used to assess the predictive value of the model, and
+* the expected out-of-sample error.
+To test the usefulness of my predictive model, I will also run it on the 20 test cases.
+
+####Partition the raw data into a training set and test set
+```{r echo=FALSE}
+#Let's first retrieve the data
+setwd("C:/Users/weijie/Desktop/Coursera R course/VIII. Practical Machine Learning")
+fileUrl1 <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+fileUrl2 <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+download.file(fileUrl1,destfile="rawdata.csv")
+rawdata <- read.csv("./rawdata.csv")
+download.file(fileUrl2,destfile="testcases.csv")
+test_cases <- read.csv("./testcases.csv")
+```
+
+By observation of the raw data, we see a few choices of how the data can be sliced: by "user", by "timestamp" or by "numwindow". It was apparent that the data should be sliced based on the variable "num_window". Otherwise, these clear patterns would definitely confound predictability!
+
+```{r echo=FALSE}
+library(ggplot2)
+par(mfrow=c(1,3),oma=c(0,0,2,0))
+plot(rawdata$user_name,rawdata$classe,ylab="Classe",xlab="User")
+plot(rawdata$cvtd_timestamp,rawdata$classe,ylab="Classe",xlab="Time Stamp")
+plot(rawdata$num_window,rawdata$classe,ylab="Classe",xlab="num_window")
+title(main="Exploratory graphs of possible slicing basis",outer=T)
+```
+
+We can now partition the raw data into a training set and test set.
+
+```{r echo=TRUE}
+library(caret)
+inTrain <- createDataPartition(rawdata$num_window,p=0.6,list=FALSE)
+training <- rawdata[inTrain,]
+testing <- rawdata[-inTrain,]
+```
+
+
+####Determining which variables should be used as predictors
+
+There are 152 variables, in 4 categories (belt, arm, forearm, dumbbell), which could possibly serve as predictors of the "classe" outcome. That's too many! (If we use all of these predictors, we will not be able to discern which variable is really meaningful/critical for prediction.) We should try to reduce this number. This can be done by removing variables that have a large number of NA or zero values, and then performing Principal Components Analysis.
+
+```{r echo=TRUE}
+#Shrink the training dataset by removing the variables that will not be used as predictors. These include the variables "username", "timestamp", "new_window", and "num_window".
+trg_allPredictors=training[,-c(1,2,3,4,5,6,7,160)]
+
+#Further shrink the training dataset by removing those variables/columns that contain a large number of NA or zero values. We define "large" as 80% or more.
+a <- NULL
+j=1
+n=nrow(training)
+for(i in 1:ncol(trg_allPredictors)){
+        trg_allPredictors[,i]=as.numeric(trg_allPredictors[,i])
+        if(sum(is.na(trg_allPredictors[,i]))>0.8*n){
+                a[j]=i
+                j=j+1
+        }
+}
+trg_Predictors_short=trg_allPredictors[,-c(a[1:j-1])]
+
+#We can now perform PCA.
+pFx <- preProcess(trg_Predictors_short,method="pca")
+trg_Predictors_PC <- predict(pFx,trg_Predictors_short)
+```
+
+Based on the PCA, 36 components were required to capture 95% of the variance.
+
+
+####Fitting a suitable model
+
+We fit a random forest model to the PCA-ed data.
+
+```{r echo=TRUE}
+library(randomForest)
+modelFit <- randomForest(trg_Predictors_PC,training$classe,ntree=500)
+modelFit
+```
+
+
+####Cross-validation against the testing data set
+
+With the model constructed, we can test its predictive value against the testing data set. These results will be summarized via the confusionMatrix() function.
+
+```{r echo=TRUE}
+testing_all=testing[,-c(1,2,3,4,5,6,7,160)]
+for(k in 1:ncol(testing_all)){
+        testing_all[,k]=as.numeric(testing_all[,k])
+}
+testing_short=testing_all[,-c(a[1:j-1])]
+testing_PC <- predict(pFx,testing_short)
+confusionMatrix(testing$classe,predict(modelFit,testing_PC))
+```
+
+Let's use Accuracy as the measure of the out-of-sample error, given that it's reasonable to weight the over-predictions (e.g. where the reference value for classe is 2 but we predicted 3) and under-predictions equally.
+
+Accurary is about 0.95 or 95%, which is wonderful and even better expected (expectation is at least 74%, based on the original data source).
+
+
+####Testing on the 20 test cases
+```{r}
+testcases_all=test_cases[,-c(1,2,3,4,5,6,7,160)]
+for(q in 1:ncol(testcases_all)){
+        testcases_all[,q]=as.numeric(testcases_all[,q])
+}
+testcases_short=testcases_all[,-c(a[1:j-1])]
+testcases_PC <- predict(pFx,testcases_short)
+Pred_Test20 <- predict(modelFit,newdata=testcases_PC)
+```
