@@ -1,0 +1,134 @@
+---
+title: "Project-Writeup"
+author: "kwerkies"
+date: "Saturday, March 21, 2015"
+output: html_document
+---
+
+###Summary
+
+Using exercise data from 6 participants, we seek to predict how well they perform their exercises. Specifically, how does a participant's performance on the various variables affect his/her "classe" grading? 
+
+In this report, I shall outline:   
+* how the predictive model was built
+* how cross-validation was used to assess the predictive value of the model, and
+* the expected out-of-sample error.
+To test the usefulness of my predictive model, I will also run it on the 20 test cases.
+
+####Partition the raw data into a training set and test set
+```{r echo=FALSE}
+#Let's first retrieve the data
+setwd("C:/Users/weijie/Desktop/Coursera R course/VIII. Practical Machine Learning")
+fileUrl1 <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+fileUrl2 <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+download.file(fileUrl1,destfile="rawdata.csv")
+rawdata <- read.csv("./rawdata.csv")
+download.file(fileUrl2,destfile="testcases.csv")
+test_cases <- read.csv("./testcases.csv")
+```
+
+By observation of the raw data, we see a few choices of how the data can be sliced: by "user", by "timestamp" or by "numwindow". It was apparent that the data should be sliced based on the variable "num_window". Otherwise, these clear patterns would definitely confound predictability!
+
+```{r echo=FALSE}
+library(ggplot2)
+par(mfrow=c(1,3),oma=c(0,0,2,0))
+plot(rawdata$user_name,rawdata$classe,ylab="Classe",xlab="User")
+plot(rawdata$cvtd_timestamp,rawdata$classe,ylab="Classe",xlab="Time Stamp")
+plot(rawdata$num_window,rawdata$classe,ylab="Classe",xlab="num_window")
+title(main="Exploratory graphs of possible slicing basis",outer=T)
+```
+
+We can now partition the raw data into a training set and test set.
+
+```{r echo=TRUE}
+library(caret)
+inTrain <- createDataPartition(rawdata$num_window,p=0.6,list=FALSE)
+training <- rawdata[inTrain,]
+testing <- rawdata[-inTrain,]
+```
+
+
+####Determining which variables should be used as predictors, and building the predictive model
+
+```{r echo=TRUE}
+#Shrink the training dataset by removing the variables that will not be used as predictors. These include the variables "username", "timestamp", "new_window", and "num_window". Also, we need to remove the outcome "Classe".
+trg_allPredictors=training[,-c(1,2,3,4,5,6,7,160)]
+```
+
+There are 152 variables, in 4 categories (belt, arm, forearm, dumbbell). Because each of these categories are associated with different exercises, we should separate them. (Later on, we'll have to weight the relative importance of these 4 categories, as predictors of the outcome.)
+
+By further observation of each of the 4 categories, we see that there are 6 key measures taken: roll, pitch, yaw, gyros, accelerometer and magnet (whereby gyros, accel and magnet have x-y-z dimensions). The other measures - such as kurtosis, skewness and standard deviation - are statistical parameters, and are secondary to these key measures. (As a further validation of this approach, we see that most of these statistical parameters are NA or zero values.) 
+
+Thus, we can further shrink the list of possible predictors.
+
+```{r echo=FALSE}
+v=152/4
+#Belt Predictors
+trg_beltPred <- trg_allPredictors[,1:v]
+trg_beltPred_temp <- trg_beltPred[,c(1,2,3,30,31,32,33,34,35,36,37,38)]
+trg_beltPredgyros <- 1/3*trg_beltPred_temp[,4]+1/3*trg_beltPred_temp[,5]+1/3*trg_beltPred_temp[,6]
+trg_beltPredaccel <- 1/3*trg_beltPred_temp[,7]+1/3*trg_beltPred_temp[,8]+1/3*trg_beltPred_temp[,9]
+trg_beltPredmagnet <- 1/3*trg_beltPred_temp[,10]+1/3*trg_beltPred_temp[,11]+1/3*trg_beltPred_temp[,12]
+trg_beltPred_short <- cbind(trg_beltPred_temp[,c(1,2,3)],trg_beltPredgyros,trg_beltPredaccel,trg_beltPredmagnet)
+names(trg_beltPred_short)
+
+#Arm Predictors
+trg_armPred <- trg_allPredictors[,(v+1):(2*v)]
+trg_armPred_temp <- trg_armPred[,c(1,2,3,30,31,32,33,34,35,36,37,38)]
+trg_armPredgyros <- 1/3*trg_armPred_temp[,4]+1/3*trg_armPred_temp[,5]+1/3*trg_armPred_temp[,6]
+trg_armPredaccel <- 1/3*trg_armPred_temp[,7]+1/3*trg_armPred_temp[,8]+1/3*trg_armPred_temp[,9]
+trg_armPredmagnet <- 1/3*trg_armPred_temp[,10]+1/3*trg_armPred_temp[,11]+1/3*trg_armPred_temp[,12]
+trg_armPred_short <- cbind(trg_armPred_temp[,c(1,2,3)],trg_armPredgyros,trg_armPredaccel,trg_armPredmagnet)
+
+#Forearm Predictors
+trg_forearmPred <- trg_allPredictors[,(2*v+1):(3*v)]
+trg_forearmPred_temp <- trg_forearmPred[,c(1,2,3,30,31,32,33,34,35,36,37,38)]
+trg_forearmPredgyros <- 1/3*trg_forearmPred_temp[,4]+1/3*trg_forearmPred_temp[,5]+1/3*trg_forearmPred_temp[,6]
+trg_forearmPredaccel <- 1/3*trg_forearmPred_temp[,7]+1/3*trg_forearmPred_temp[,8]+1/3*trg_forearmPred_temp[,9]
+trg_forearmPredmagnet <- 1/3*trg_forearmPred_temp[,10]+1/3*trg_forearmPred_temp[,11]+1/3*trg_forearmPred_temp[,12]
+trg_forearmPred_short <- cbind(trg_forearmPred_temp[,c(1,2,3)],trg_forearmPredgyros,trg_forearmPredaccel,trg_forearmPredmagnet)
+
+#Dumbbell Predictors
+trg_dumbbellPred <- trg_allPredictors[,(3*v+1):(4*v)]
+trg_dumbbellPred_temp <- trg_dumbbellPred[,c(1,2,3,30,31,32,33,34,35,36,37,38)]
+trg_dumbbellPredgyros <- 1/3*trg_dumbbellPred_temp[,4]+1/3*trg_dumbbellPred_temp[,5]+1/3*trg_dumbbellPred_temp[,6]
+trg_dumbbellPredaccel <- 1/3*trg_dumbbellPred_temp[,7]+1/3*trg_dumbbellPred_temp[,8]+1/3*trg_dumbbellPred_temp[,9]
+trg_dumbbellPredmagnet <- 1/3*trg_dumbbellPred_temp[,10]+1/3*trg_dumbbellPred_temp[,11]+1/3*trg_dumbbellPred_temp[,12]
+trg_dumbbellPred_short <- cbind(trg_dumbbellPred_temp[,c(1,2,3)],trg_dumbbellPredgyros,trg_dumbbellPredaccel,trg_dumbbellPredmagnet)
+```
+
+
+####Fitting the model
+
+As discussed above, we should fit the model separately on the 4 categories, and thereafter determine their relative importance.
+
+```{r echo=TRUE}
+trg_Pred_short <- cbind(trg_beltPred_short,trg_armPred_short,trg_forearmPred_short,trg_dumbbellPred_short)
+modelFit <- train(as.numeric(training$classe)~.,method="glm",preProcess="pca",data=trg_Pred_short)
+c = predict(modelFit,testing)
+modelFit1 <- train(as.numeric(training$classe)~.,method="lm",preProcess="pca",data=trg_beltPred_short)
+modelFit2 <- train(as.numeric(training$classe)~.,method="lm",preProcess="pca",data=trg_armPred_short)
+modelFit3 <- train(as.numeric(training$classe)~.,method="lm",preProcess="pca",data=trg_forearmPred_short)
+modelFit4 <- train(as.numeric(training$classe)~.,method="lm",preProcess="pca",data=trg_dumbbellPred_short)
+```
+
+####Cross-validation against the testing data set
+
+With the model constructed, we can test its predictive value against the testing data set. These results will be summarized via the confusionMatrix() function.
+
+```{r echo=TRUE}
+b <- predict(modelFit,testing_short)
+for(m in 1:nrow(testing_short)){
+        b[m]=round(b[m],digits=0)
+}
+b=factor(b,levels=c(1,2,3,4,5))
+confusionMatrix(b,as.numeric(testing$classe))
+```
+
+Let's use Accuracy as the measure of the out-of-sample error, given that it's reasonable to weight the over-predictions (e.g. where the reference value for classe is 2 but we predicted 3) and under-predictions equally. Accurary is 0.3053 or 30.53%, which is decent but not as good as expected.
+
+####Testing on the 20 test cases
+```{r echo=TRUE}
+for(q in 1:nrow(test_cases)){
+        
+}
